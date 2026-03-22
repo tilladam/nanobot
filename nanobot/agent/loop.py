@@ -39,6 +39,7 @@ from nanobot.agent.tools.message import capture_message_deliveries
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.runtime_control import AgentRuntimeControl
 from nanobot.agent.tools.shell import ExecTool
+from nanobot.agent.tools.tts import TTSTool
 from nanobot.agent.turn_delivery import (
     TurnDelivery,
     TurnDeliveryFactory,
@@ -316,6 +317,9 @@ class AgentLoop:
         local_trigger_store: LocalTriggerStore | None = None,
         idle_compact_check_interval_seconds: int = 0,
         recovery_admission: RecoveryAdmission | None = None,
+        elevenlabs_api_key: str = "",
+        elevenlabs_voice_id: str | None = None,
+        elevenlabs_model_id: str | None = None,
     ):
         from nanobot.config.schema import ToolsConfig
 
@@ -368,6 +372,9 @@ class AgentLoop:
         self.network_config = network_config or NetworkConfig()
         self.web_config = _tc.web
         self.exec_config = _tc.exec
+        self._elevenlabs_api_key = elevenlabs_api_key
+        self._elevenlabs_voice_id = elevenlabs_voice_id
+        self._elevenlabs_model_id = elevenlabs_model_id
         self.cron_service = cron_service
         self.local_trigger_store = local_trigger_store
         self.restrict_to_workspace = restrict_to_workspace
@@ -673,6 +680,14 @@ class AgentLoop:
         )
         loader = ToolLoader()
         registered = loader.load(ctx, self.tools)
+
+        if self._elevenlabs_api_key:
+            self.tools.register(TTSTool(
+                api_key=self._elevenlabs_api_key,
+                voice_id=self._elevenlabs_voice_id,
+                model_id=self._elevenlabs_model_id,
+            ))
+            registered.append("tts")
 
         logger.info("Registered {} tools: {}", len(registered), registered)
 
