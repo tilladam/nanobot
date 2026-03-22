@@ -24,6 +24,8 @@ class BaseChannel(ABC):
     display_name: str = "Base"
     transcription_provider: str = "groq"
     transcription_api_key: str = ""
+    google_transcription_api_key: str = ""
+
 
     def __init__(self, config: Any, bus: MessageBus):
         """
@@ -38,20 +40,37 @@ class BaseChannel(ABC):
         self._running = False
 
     async def transcribe_audio(self, file_path: str | Path) -> str:
-        """Transcribe an audio file via Whisper (OpenAI or Groq). Returns empty string on failure."""
-        if not self.transcription_api_key:
-            return ""
-        try:
-            if self.transcription_provider == "openai":
-                from nanobot.providers.transcription import OpenAITranscriptionProvider
-                provider = OpenAITranscriptionProvider(api_key=self.transcription_api_key)
-            else:
-                from nanobot.providers.transcription import GroqTranscriptionProvider
-                provider = GroqTranscriptionProvider(api_key=self.transcription_api_key)
-            return await provider.transcribe(file_path)
-        except Exception as e:
-            logger.warning("{}: audio transcription failed: {}", self.name, e)
-            return ""
+        """Transcribe an audio file. Tries Gemini first, then falls back to the
+        configured Whisper provider (OpenAI or Groq). Returns empty string on failure."""
+        from nanobot.providers.transcription import (
+            GeminiTranscriptionProvider,
+            GroqTranscriptionProvider,
+            OpenAITranscriptionProvider,
+        )
+
+        if self.google_transcription_api_key:
+            try:
+                result = await GeminiTranscriptionProvider(
+                    api_key=self.google_transcription_api_key
+                ).transcribe(file_path)
+                if result:
+                    return result
+            except Exception as e:
+                logger.warning(
+                    "{}: Gemini transcription failed, falling back to Whisper: {}", self.name, e
+                )
+
+        if self.transcription_api_key:
+            try:
+                if self.transcription_provider == "openai":
+                    provider = OpenAITranscriptionProvider(api_key=self.transcription_api_key)
+                else:
+                    provider = GroqTranscriptionProvider(api_key=self.transcription_api_key)
+                return await provider.transcribe(file_path)
+            except Exception as e:
+                logger.warning("{}: Whisper transcription failed: {}", self.name, e)
+
+        return ""
 
     async def login(self, force: bool = False) -> bool:
         """
