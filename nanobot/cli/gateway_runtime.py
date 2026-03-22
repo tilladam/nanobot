@@ -500,6 +500,9 @@ def _run_gateway(
         hook_factories=[create_file_edit_activity_hook],
         tool_registry=tools,
         recovery_admission=recovery,
+        elevenlabs_api_key=config.providers.elevenlabs.api_key,
+        elevenlabs_voice_id=config.providers.elevenlabs.voice_id,
+        elevenlabs_model_id=config.providers.elevenlabs.model_id,
     )
     def _schedule_webui_background(awaitable: Awaitable[None]) -> None:
         agent.schedule_background(cast(Coroutine[Any, Any, None], awaitable))
