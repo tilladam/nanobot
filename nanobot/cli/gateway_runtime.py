@@ -613,6 +613,9 @@ def _run_claimed_gateway(
         tool_registry=tools,
         recovery_admission=recovery,
         builtin_assembly=install_goal,
+        elevenlabs_api_key=config.providers.elevenlabs.api_key,
+        elevenlabs_voice_id=config.providers.elevenlabs.voice_id,
+        elevenlabs_model_id=config.providers.elevenlabs.model_id,
     )
 
     def _schedule_webui_background(awaitable: Awaitable[None]) -> None:

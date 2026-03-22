@@ -190,6 +190,9 @@ def _run_classic(runtime_config: Config, *, message: str | None, session_id: str
             hook_factories=[create_file_edit_activity_hook],
             tool_registry=tools,
             builtin_assembly=install_goal,
+            elevenlabs_api_key=runtime_config.providers.elevenlabs.api_key,
+            elevenlabs_voice_id=runtime_config.providers.elevenlabs.voice_id,
+            elevenlabs_model_id=runtime_config.providers.elevenlabs.model_id,
         )
     except ValueError as exc:
         _print_agent_start_error(exc)

@@ -256,6 +256,8 @@ class ProviderConfig(Base):
     extra_query: dict[str, str] | None = None  # Extra query params (e.g. api-version for Azure-style gateways)
     use_proxy: bool = False
     thinking_style: str | None = None
+    voice_id: str | None = None  # For TTS providers (e.g. ElevenLabs)
+    model_id: str | None = None  # For TTS providers (e.g. ElevenLabs)
 
     # Valid values mirror the keys of _THINKING_STYLE_MAP in
     # nanobot/providers/openai_compat_provider.py. Kept duplicated here to
@@ -333,6 +335,7 @@ class ProvidersConfig(Base):
     volcengine: ProviderConfig = Field(default_factory=ProviderConfig)
     volcengine_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)
     byteplus: ProviderConfig = Field(default_factory=ProviderConfig)
+    elevenlabs: ProviderConfig = Field(default_factory=ProviderConfig)  # ElevenLabs TTS
     byteplus_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)
     openai_codex: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # OpenAI Codex (OAuth)
     xai_grok: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # xAI Grok (OAuth)
