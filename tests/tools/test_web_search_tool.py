@@ -1,11 +1,22 @@
 """Tests for multi-provider web search."""
 
+from concurrent.futures import ThreadPoolExecutor
+
 import httpx
 import pytest
 
 from nanobot.agent.tools.registry import is_tool_error_result
-from nanobot.agent.tools.web import WebSearchTool
+from nanobot.agent.tools.web import WebSearchTool, set_ddgs_executor
 from nanobot.config.schema import WebSearchConfig
+
+
+@pytest.fixture(autouse=True)
+def mock_ddgs_executor():
+    """Use ThreadPoolExecutor for testing so monkeypatches work."""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        old = set_ddgs_executor(executor)
+        yield
+        set_ddgs_executor(old)
 
 
 def _tool(
@@ -526,6 +537,12 @@ async def test_duckduckgo_search(monkeypatch):
         def __init__(self, **kw):
             pass
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
         def text(self, query, max_results=5):
             return [{"title": "DDG Result", "href": "https://ddg.example", "body": "From DuckDuckGo"}]
 
@@ -533,7 +550,7 @@ async def test_duckduckgo_search(monkeypatch):
     import nanobot.agent.tools.web as web_mod
     monkeypatch.setattr(web_mod, "DDGS", MockDDGS, raising=False)
 
-    monkeypatch.setattr("ddgs.DDGS", MockDDGS)
+    monkeypatch.setattr("nanobot.agent.tools.web._DDGS_CLASS", MockDDGS)
 
     tool = _tool(provider="duckduckgo")
     result = await tool.execute(query="hello")
@@ -579,10 +596,16 @@ async def test_provider_falls_back_to_duckduckgo_without_key(monkeypatch, env_ke
         def __init__(self, **kw):
             pass
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
         def text(self, query, max_results=5):
             return [{"title": "Fallback", "href": "https://ddg.example", "body": "DuckDuckGo fallback"}]
 
-    monkeypatch.setattr("ddgs.DDGS", MockDDGS)
+    monkeypatch.setattr("nanobot.agent.tools.web._DDGS_CLASS", MockDDGS)
     monkeypatch.delenv(env_key, raising=False)
 
     tool = _tool(provider=provider, api_key="")
@@ -724,10 +747,16 @@ async def test_searxng_no_base_url_falls_back(monkeypatch):
         def __init__(self, **kw):
             pass
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
         def text(self, query, max_results=5):
             return [{"title": "Fallback", "href": "https://ddg.example", "body": "fallback"}]
 
-    monkeypatch.setattr("ddgs.DDGS", MockDDGS)
+    monkeypatch.setattr("nanobot.agent.tools.web._DDGS_CLASS", MockDDGS)
     monkeypatch.delenv("SEARXNG_BASE_URL", raising=False)
 
     tool = _tool(provider="searxng", base_url="")
@@ -748,6 +777,12 @@ async def test_jina_422_falls_back_to_duckduckgo(monkeypatch):
         def __init__(self, **kw):
             pass
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
         def text(self, query, max_results=5):
             return [{"title": "Fallback", "href": "https://ddg.example", "body": "DuckDuckGo fallback"}]
 
@@ -760,7 +795,7 @@ async def test_jina_422_falls_back_to_duckduckgo(monkeypatch):
         )
 
     monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
-    monkeypatch.setattr("ddgs.DDGS", MockDDGS)
+    monkeypatch.setattr("nanobot.agent.tools.web._DDGS_CLASS", MockDDGS)
 
     tool = _tool(provider="jina", api_key="jina-key")
     result = await tool.execute(query="test")
@@ -795,11 +830,17 @@ async def test_duckduckgo_timeout_returns_error(monkeypatch):
         def __init__(self, **kw):
             pass
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
         def text(self, query, max_results=5):
             gate.wait(timeout=10)
             return []
 
-    monkeypatch.setattr("ddgs.DDGS", HangingDDGS)
+    monkeypatch.setattr("nanobot.agent.tools.web._DDGS_CLASS", HangingDDGS)
     tool = _tool(provider="duckduckgo")
     tool.config.timeout = 0.2
     result = await tool.execute(query="test")
