@@ -10,10 +10,12 @@ import json
 import os
 import re
 from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
 from typing import Any, cast
 from urllib.parse import parse_qsl, quote, urljoin, urlparse
 
 import httpx
+from ddgs import DDGS
 from loguru import logger
 from pydantic import Field
 
@@ -79,6 +81,38 @@ class WebToolsConfig(Base):
     user_agent: str | None = None
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
+
+
+_DDGS_EXECUTOR: Any = None
+
+
+def _get_ddgs_executor() -> Any:
+    """Get or initialize the executor for DuckDuckGo searches."""
+    global _DDGS_EXECUTOR
+    if _DDGS_EXECUTOR is None:
+        _DDGS_EXECUTOR = ProcessPoolExecutor(max_workers=1)
+    return _DDGS_EXECUTOR
+
+
+def set_ddgs_executor(executor: Any) -> Any:
+    """Override the executor used for DuckDuckGo searches (useful for testing)."""
+    global _DDGS_EXECUTOR
+    old = _DDGS_EXECUTOR
+    _DDGS_EXECUTOR = executor
+    return old
+
+
+_DDGS_CLASS = DDGS
+
+
+def _sync_ddgs_search(query: str, n: int, proxy: str | None = None) -> list[dict[str, str]]:
+    """Isolated worker for DuckDuckGo search to prevent library hangs."""
+    try:
+        with _DDGS_CLASS(timeout=10, proxy=proxy) as ddgs:
+            return list(ddgs.text(query, max_results=n))
+    except Exception as e:
+        logger.warning("DDG sync search worker failed: {}", e)
+        return []
 
 
 def _strip_tags(text: str) -> str:
@@ -967,15 +1001,11 @@ class WebSearchTool(Tool):
         return _format_results(query, items, n)
 
     async def _search_duckduckgo(self, query: str, n: int) -> str:
+        # Running in a separate process to avoid library hangs/deadlocks in the main process.
         try:
-            # Note: duckduckgo_search is synchronous and does its own requests
-            # We run it in a thread to avoid blocking the loop
-            from ddgs import DDGS  # pyright: ignore[reportUnknownVariableType]
-
-            ddgs_type = cast(Any, DDGS)
-            ddgs = ddgs_type(timeout=10, proxy=self.proxy)
+            loop = asyncio.get_running_loop()
             raw = await asyncio.wait_for(
-                asyncio.to_thread(ddgs.text, query, max_results=n),
+                loop.run_in_executor(_get_ddgs_executor(), _sync_ddgs_search, query, n, self.proxy),
                 timeout=self.config.timeout,
             )
             if not raw:
