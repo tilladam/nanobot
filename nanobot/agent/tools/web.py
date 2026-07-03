@@ -108,7 +108,11 @@ _DDGS_CLASS = DDGS
 def _sync_ddgs_search(query: str, n: int, proxy: str | None = None) -> list[dict[str, str]]:
     """Isolated worker for DuckDuckGo search to prevent library hangs."""
     try:
-        with _DDGS_CLASS(timeout=10, proxy=proxy) as ddgs:
+        ddgs = _DDGS_CLASS(timeout=10, proxy=proxy)
+        if hasattr(ddgs, "__enter__"):
+            with ddgs:
+                return list(ddgs.text(query, max_results=n))
+        else:
             return list(ddgs.text(query, max_results=n))
     except Exception as e:
         logger.warning("DDG sync search worker failed: {}", e)

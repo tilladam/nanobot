@@ -266,7 +266,7 @@ async def test_serper_fallback_to_duckduckgo_when_no_key(monkeypatch):
         def text(self, query, max_results=5):
             return [{"title": "Fallback", "href": "https://ddg.example", "body": "DuckDuckGo fallback"}]
 
-    monkeypatch.setattr("ddgs.DDGS", MockDDGS)
+    monkeypatch.setattr("nanobot.agent.tools.web._DDGS_CLASS", MockDDGS)
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
 
     tool = _tool(provider="serper", api_key="")
@@ -341,7 +341,7 @@ async def test_bocha_missing_key_falls_back_to_duckduckgo(monkeypatch):
         def text(self, query, max_results=5):
             return [{"title": "Fallback", "href": "https://ddg.example", "body": "DuckDuckGo fallback"}]
 
-    monkeypatch.setattr("ddgs.DDGS", MockDDGS)
+    monkeypatch.setattr("nanobot.agent.tools.web._DDGS_CLASS", MockDDGS)
     monkeypatch.delenv("BOCHA_API_KEY", raising=False)
 
     tool = _tool(provider="bocha")
@@ -409,7 +409,7 @@ async def test_volcengine_missing_key_falls_back_to_duckduckgo(monkeypatch):
         def text(self, query, max_results=5):
             return [{"title": "Fallback", "href": "https://ddg.example", "body": "DuckDuckGo fallback"}]
 
-    monkeypatch.setattr("ddgs.DDGS", MockDDGS)
+    monkeypatch.setattr("nanobot.agent.tools.web._DDGS_CLASS", MockDDGS)
     monkeypatch.delenv("VOLCENGINE_SEARCH_API_KEY", raising=False)
     monkeypatch.delenv("WEB_SEARCH_API_KEY", raising=False)
 
@@ -481,7 +481,7 @@ async def test_duckduckgo_search_passes_proxy(monkeypatch):
         def text(self, query, max_results=5):
             return [{"title": "Result", "href": "https://example.com", "body": "OK"}]
 
-    monkeypatch.setattr("ddgs.DDGS", ProxyCaptorDDGS)
+    monkeypatch.setattr("nanobot.agent.tools.web._DDGS_CLASS", ProxyCaptorDDGS)
 
     tool = WebSearchTool(
         config=WebSearchConfig(provider="duckduckgo"),
@@ -737,7 +737,7 @@ async def test_exa_fallback_to_duckduckgo_when_no_key(monkeypatch):
         def text(self, query, max_results=5):
             return [{"title": "Fallback", "href": "https://ddg.example", "body": "DuckDuckGo fallback"}]
 
-    monkeypatch.setattr("ddgs.DDGS", MockDDGS)
+    monkeypatch.setattr("nanobot.agent.tools.web._DDGS_CLASS", MockDDGS)
     monkeypatch.delenv("EXA_API_KEY", raising=False)
 
     tool = _tool(provider="exa", api_key="")
@@ -852,7 +852,7 @@ async def test_olostep_missing_key_falls_back_to_duckduckgo(monkeypatch):
     monkeypatch.setitem(sys.modules, "olostep", fake_mod)
 
     monkeypatch.delenv("OLOSTEP_API_KEY", raising=False)
-    with patch("ddgs.DDGS", MockDDGS):
+    with patch("nanobot.agent.tools.web._DDGS_CLASS", MockDDGS):
         tool = _tool(provider="olostep", api_key="")
         result = await tool.execute(query="test query")
 
