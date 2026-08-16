@@ -6,6 +6,7 @@ x-common-config: &common-config
       NANOBOT_CHANNELS: ${NANOBOT_CHANNELS:-whatsapp}
   volumes:
     - ~/.nanobot:/home/nanobot/.nanobot
+    - /mnt/HC_Volume_104301936/obsidian:/mnt/obsidian
   cap_drop:
     - ALL
   # Entrypoint uses these to fix bind-mount ownership and drop to the nanobot user.
