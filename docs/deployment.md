@@ -151,12 +151,12 @@ is not guaranteed write access to the virtual environment.
 ```bash
 docker compose run --rm nanobot-cli onboard   # first-time setup
 vim ~/.nanobot/config.json                     # add API keys
-docker compose up -d nanobot-gateway           # start gateway
+docker compose up -d nanobot           # start gateway
 ```
 
 ```bash
 docker compose run --rm nanobot-cli agent -m "Hello!"   # run CLI
-docker compose logs -f nanobot-gateway                   # view logs
+docker compose logs -f nanobot                   # view logs
 docker compose down                                      # stop
 ```
 
@@ -169,7 +169,7 @@ AppArmor/seccomp profiles remain enabled. If you explicitly set
 override file when starting containers:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.bwrap.yml up -d nanobot-gateway
+docker compose -f docker-compose.yml -f docker-compose.bwrap.yml up -d nanobot
 docker compose -f docker-compose.yml -f docker-compose.bwrap.yml run --rm nanobot-cli agent -m "Hello!"
 ```
 

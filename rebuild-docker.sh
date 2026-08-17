@@ -1,10 +1,11 @@
 #!/bin/bash
 
-docker rm -f nanobot
-docker build -t nanobot .
-docker run -d \
-  --name nanobot \
-  --restart always \
-  -v ~/.nanobot:/home/nanobot/.nanobot \
-  -v /mnt/HC_Volume_104301936/obsidian:/mnt/obsidian \
-  nanobot gateway
+# Pre-create the directory to avoid docker daemon creating it as root
+mkdir -p ./instances/briefings/.nanobot
+
+# Clean up legacy raw docker container if it exists
+docker rm -f nanobot 2>/dev/null || true
+
+docker compose down
+docker compose build
+docker compose up -d
