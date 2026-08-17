@@ -4,9 +4,6 @@ x-common-config: &common-config
     dockerfile: Dockerfile
     args:
       NANOBOT_CHANNELS: ${NANOBOT_CHANNELS:-whatsapp}
-  volumes:
-    - ~/.nanobot:/home/nanobot/.nanobot
-    - /mnt/HC_Volume_104301936/obsidian:/mnt/obsidian
   cap_drop:
     - ALL
   # Entrypoint uses these to fix bind-mount ownership and drop to the nanobot user.
@@ -20,14 +17,37 @@ x-common-config: &common-config
     - no-new-privileges:true
 
 services:
-  nanobot-gateway:
-    container_name: nanobot-gateway
+  nanobot:
+    container_name: nanobot
     <<: *common-config
     command: ["gateway"]
-    restart: unless-stopped
+    restart: always
     ports:
       - 127.0.0.1:18790:18790
       - 8765:8765
+    volumes:
+      - ~/.nanobot:/home/nanobot/.nanobot
+      - /mnt/HC_Volume_104301936/obsidian:/mnt/obsidian
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  briefings:
+    container_name: briefings
+    <<: *common-config
+    command: ["gateway"]
+    restart: always
+    ports:
+      - 127.0.0.1:18791:18790
+      - 8766:8765
+    volumes:
+      - ./instances/briefings/.nanobot:/home/nanobot/.nanobot
+      - /mnt/HC_Volume_104301936/obsidian:/mnt/obsidian
     deploy:
       resources:
         limits:
@@ -45,6 +65,9 @@ services:
     restart: unless-stopped
     ports:
       - 127.0.0.1:8900:8900
+    volumes:
+      - ~/.nanobot:/home/nanobot/.nanobot
+      - /mnt/HC_Volume_104301936/obsidian:/mnt/obsidian
     deploy:
       resources:
         limits:
@@ -61,3 +84,6 @@ services:
     command: ["status"]
     stdin_open: true
     tty: true
+    volumes:
+      - ~/.nanobot:/home/nanobot/.nanobot
+      - /mnt/HC_Volume_104301936/obsidian:/mnt/obsidian
