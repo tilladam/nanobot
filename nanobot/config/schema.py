@@ -381,6 +381,7 @@ class HeartbeatConfig(Base):
 
     enabled: bool = True
     interval_s: int = 30 * 60
+    model: str | None = None  # Lightweight model override for heartbeat calls; defaults to the agent model
 
 
 class ApiConfig(Base):
