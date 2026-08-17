@@ -119,6 +119,7 @@ def system_settings_payload(
             "heartbeat": {
                 "enabled": config.gateway.heartbeat.enabled,
                 "interval_s": config.gateway.heartbeat.interval_s,
+                "model": config.gateway.heartbeat.model,
             },
             "dream": {
                 "schedule": defaults.dream.describe_schedule(),

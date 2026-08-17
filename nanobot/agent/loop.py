@@ -252,6 +252,16 @@ class AgentLoop:
             return None
         return self.runtime_resolver.resolve_preset(self.dream_model_preset)
 
+    def heartbeat_runtime(self) -> LLMRuntime | None:
+        """Resolve the optional lightweight model override for heartbeat calls."""
+        if not self.heartbeat_model:
+            return None
+        return LLMRuntime.capture(
+            self.provider,
+            self.heartbeat_model,
+            context_window_tokens=self.context_window_tokens,
+        )
+
     _RUNTIME_CHECKPOINT_KEY = "runtime_checkpoint"
     _PENDING_USER_TURN_KEY = "pending_user_turn"
     _PROVIDER_STATE_CHECKPOINT_VERSION_KEY = "provider_state_checkpoint_version"
@@ -289,6 +299,7 @@ class AgentLoop:
         preset_catalog_loader: preset_helpers.PresetCatalogLoader | None = None,
         model_preset: str | None = None,
         dream_model_preset: str | None = None,
+        heartbeat_model: str | None = None,
         preset_snapshot_loader: preset_helpers.PresetSnapshotLoader | None = None,
         turn_delivery_factory: TurnDeliveryFactory | None = None,
         runtime_model_publisher: Callable[[str, str | None], None] | None = None,
@@ -341,6 +352,7 @@ class AgentLoop:
             preset_snapshot_loader=preset_snapshot_loader,
         )
         self.dream_model_preset = dream_model_preset
+        self.heartbeat_model = heartbeat_model
         self.max_tool_result_chars = (
             max_tool_result_chars
             if max_tool_result_chars is not None
@@ -514,6 +526,7 @@ class AgentLoop:
             model_presets=preset_helpers.configured_model_presets(config),
             model_preset=defaults.model_preset,
             dream_model_preset=defaults.dream.model_override,
+            heartbeat_model=config.gateway.heartbeat.model,
             restart_mode=config.gateway.restart_mode,
             provider_snapshot_loader=provider_snapshot_loader,
             preset_snapshot_loader=preset_snapshot_loader,
