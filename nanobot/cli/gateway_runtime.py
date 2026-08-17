@@ -652,6 +652,7 @@ def _run_gateway(
             suppress_token = None
             if isinstance(message_tool, MessageTool):
                 suppress_token = message_tool.set_suppress_delivery(True)
+            heartbeat_runtime = agent.heartbeat_runtime()
             try:
                 await mcp_provider.connect()
                 resp = await agent.process_direct(
@@ -660,6 +661,7 @@ def _run_gateway(
                     channel=channel,
                     chat_id=chat_id,
                     on_progress=_silent,
+                    runtime=heartbeat_runtime,
                 )
             finally:
                 if isinstance(message_tool, MessageTool) and suppress_token is not None:
@@ -683,7 +685,7 @@ def _run_gateway(
                     response=response,
                     task_context=prompt,
                     provider=agent.provider,
-                    model=agent.model,
+                    model=heartbeat_runtime.model if heartbeat_runtime else agent.model,
                     evaluator_prompt=evaluator_prompt,
                     default_notify=False,
                 )

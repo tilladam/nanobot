@@ -333,6 +333,7 @@ class HeartbeatConfig(Base):
     enabled: bool = True
     interval_s: int = 30 * 60  # 30 minutes
     keep_recent_messages: int = 8
+    model: str | None = None  # Lightweight model override for heartbeat calls; defaults to the agent model
 
 
 class ApiConfig(Base):

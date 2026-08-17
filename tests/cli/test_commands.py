@@ -2163,6 +2163,9 @@ def test_heartbeat_empty_response_still_retains_recent_messages(
         async def process_direct(self, *_args, **_kwargs):
             return SimpleNamespace(content="")
 
+        def heartbeat_runtime(self):
+            return None
+
         async def aclose(self) -> None:
             return None
 
@@ -2202,6 +2205,110 @@ def test_heartbeat_empty_response_still_retains_recent_messages(
     assert seen["session_key"] == "heartbeat"
     assert seen["retained_limit"] == config.gateway.heartbeat.keep_recent_messages
     assert seen["saved_session"] is seen["heartbeat_session"]
+
+
+def test_heartbeat_model_override_reaches_process_direct_and_evaluator(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    config.gateway.heartbeat.model = "cheap-model"
+    config.workspace_path.mkdir(parents=True)
+    (config.workspace_path / "HEARTBEAT.md").write_text(
+        "## Active Tasks\n\n- Check repository health\n",
+        encoding="utf-8",
+    )
+
+    provider = _fake_provider()
+    bus = MagicMock()
+    bus.publish_outbound = AsyncMock()
+    seen: dict[str, object] = {}
+
+    class _FakeSession:
+        def retain_recent_legal_suffix(self, _limit: int) -> None:
+            return None
+
+    class _FakeSessionManager:
+        def __init__(self, _workspace: Path) -> None:
+            self.session = _FakeSession()
+
+        def get_or_create(self, _key: str) -> _FakeSession:
+            return self.session
+
+        def save(self, _session: _FakeSession) -> None:
+            return None
+
+        def list_sessions(self) -> list[dict[str, str]]:
+            return [{"key": "telegram:u1"}]
+
+    class _FakeCron:
+        def __init__(self, _store_path: Path) -> None:
+            self.on_job = None
+            seen["cron"] = self
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+        def register_system_job(self, _job: CronJob) -> None:
+            raise _StopGatewayError("stop")
+
+    class _FakeAgentLoop(_GatewayAgentContractStub):
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.model = "main-model"
+            self.provider = kwargs.get("provider", object())
+            self.sessions = kwargs["session_manager"]
+            self.tools = {}
+
+        async def process_direct(self, *_args, **kwargs):
+            seen["process_direct_runtime"] = kwargs.get("runtime")
+            return SimpleNamespace(content="did the thing")
+
+        def heartbeat_runtime(self):
+            return SimpleNamespace(model="cheap-model")
+
+        async def aclose(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _FakeChannelManager:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.enabled_channels = ["telegram"]
+
+    async def _capturing_evaluator(*_args, **kwargs) -> bool:
+        seen["evaluator_model"] = kwargs.get("model")
+        return False
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        make_provider=lambda _config: provider,
+        message_bus=lambda: bus,
+        session_manager=_FakeSessionManager,
+        cron_service=_FakeCron,
+    )
+    monkeypatch.setattr("nanobot.cli.gateway_runtime.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("nanobot.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("nanobot.cli.gateway_runtime.read_webui_sidebar_state", lambda: {})
+    monkeypatch.setattr("nanobot.cli.gateway_runtime.evaluate_response", _capturing_evaluator)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+
+    assert isinstance(result.exception, _StopGatewayError)
+    cron = seen["cron"]
+    asyncio.run(cron.on_job(CronJob(id="heartbeat", name="heartbeat")))
+
+    assert seen["process_direct_runtime"].model == "cheap-model"
+    assert seen["evaluator_model"] == "cheap-model"
 
 
 def test_webui_yes_creates_config_and_enables_local_websocket(
