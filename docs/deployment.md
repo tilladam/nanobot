@@ -25,7 +25,7 @@ Restart the deployed process after editing `config.json`. Long-running processes
 | Render | One-click hosted gateway and WebUI | Persistent disk at `/home/nanobot/.nanobot` | [Deploy to Render](#render) |
 | Docker Compose | Repeatable container runs on Linux servers or workstations | Bind-mount `~/.nanobot` to `/home/nanobot/.nanobot` | `docker compose run --rm nanobot-cli agent -m "Hello!"` |
 | Docker CLI | Manual container testing or small one-off hosts | Bind-mount `~/.nanobot` to `/home/nanobot/.nanobot` | `docker run -v ~/.nanobot:/home/nanobot/.nanobot --rm nanobot status` |
-| systemd user service | Linux user-level gateway that restarts automatically | Host user's `~/.nanobot` unless you pass explicit paths | `systemctl --user status nanobot-gateway` |
+| systemd user service | Linux user-level gateway that restarts automatically | Host user's `~/.nanobot` unless you pass explicit paths | `systemctl --user status nanobot` |
 | macOS LaunchAgent | macOS gateway that starts after login | Host user's `~/.nanobot` unless the plist passes explicit paths | `launchctl list | grep ai.nanobot.gateway` |
 
 ## Render
@@ -123,7 +123,7 @@ curl --fail http://127.0.0.1:18790/health
 
 ```bash
 docker compose run --rm nanobot-cli agent -m "Hello!"   # run CLI
-docker compose logs -f nanobot-gateway                   # view logs
+docker compose logs -f nanobot                   # view logs
 docker compose down                                      # stop
 ```
 
@@ -132,7 +132,7 @@ Open `http://HOST:8765` and enter the configured `tokenIssueSecret` when prompte
 The default Compose file drops all Linux capabilities except `CHOWN`, `SETUID`, and `SETGID`, which the root entrypoint needs to fix bind-mount ownership and become UID 1000. It also enables `no-new-privileges`, so the non-root process cannot regain those bootstrap capabilities through setuid binaries or file capabilities. Docker's default AppArmor/seccomp profiles remain enabled. If you explicitly set `"tools.exec.sandbox": "bwrap"` in `~/.nanobot/config.json`, add the bwrap override file when starting containers:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.bwrap.yml up -d nanobot-gateway
+docker compose -f docker-compose.yml -f docker-compose.bwrap.yml up -d nanobot
 docker compose -f docker-compose.yml -f docker-compose.bwrap.yml run --rm nanobot-cli agent -m "Hello!"
 ```
 
@@ -249,13 +249,13 @@ nanobot gateway install-service \
 Common operations:
 
 ```bash
-systemctl --user status nanobot-gateway        # check status
-systemctl --user restart nanobot-gateway       # restart after config changes
-journalctl --user -u nanobot-gateway -f        # follow logs
+systemctl --user status nanobot        # check status
+systemctl --user restart nanobot       # restart after config changes
+journalctl --user -u nanobot -f        # follow logs
 nanobot gateway uninstall-service --manager systemd
 ```
 
-The installer writes `~/.config/systemd/user/nanobot-gateway.service`, runs `systemctl --user daemon-reload`, enables the unit, and restarts it. It uses the current Python executable with `python -m nanobot gateway --foreground`, so the service runs in the same environment you used to install nanobot.
+The installer writes `~/.config/systemd/user/nanobot.service`, runs `systemctl --user daemon-reload`, enables the unit, and restarts it. It uses the current Python executable with `python -m nanobot gateway --foreground`, so the service runs in the same environment you used to install nanobot.
 
 > **Note:** User services only run while you are logged in. To keep the gateway running after logout, enable lingering:
 >
