@@ -3,6 +3,7 @@
 from typing import Any
 
 from nanobot.channels.contracts import ChannelValidationContext
+from nanobot.channels.email import ms_oauth as email_oauth
 from nanobot.channels.validation import (
     check,
     int_value,
@@ -20,7 +21,9 @@ def validate(
 ) -> dict[str, Any]:
     checks, missing = required_checks("email", values)
     if truthy(values.get("consentGranted")):
-        checks.append(check("consent", "Mailbox consent", "pass", "Consent is enabled for this mailbox."))
+        checks.append(
+            check("consent", "Mailbox consent", "pass", "Consent is enabled for this mailbox.")
+        )
     else:
         checks.append(
             check(
@@ -28,6 +31,28 @@ def validate(
                 "Mailbox consent",
                 "fail",
                 "Grant consent before nanobot reads this mailbox.",
+            )
+        )
+
+    oauth_tenant_id = string_value(values.get("oauthTenantId"))
+    oauth_client_id = string_value(values.get("oauthClientId"))
+    oauth_client_secret = string_value(values.get("oauthClientSecret"))
+    if oauth_tenant_id and oauth_client_id and oauth_client_secret:
+        mailbox = string_value(
+            values.get("fromAddress") or values.get("imapUsername") or values.get("smtpUsername")
+        )
+        signed_in = bool(
+            mailbox
+            and email_oauth.get_email_oauth_login_status(oauth_tenant_id, oauth_client_id, mailbox)
+        )
+        checks.append(
+            check(
+                "oauth_signin",
+                "Microsoft sign-in",
+                "pass" if signed_in else "fail",
+                "Signed in."
+                if signed_in
+                else "Run `nanobot channels login email` to sign in with this mailbox.",
             )
         )
 
@@ -80,9 +105,7 @@ def validate(
 
     identity = {
         "account": string_value(
-            values.get("fromAddress")
-            or values.get("imapUsername")
-            or values.get("smtpUsername")
+            values.get("fromAddress") or values.get("imapUsername") or values.get("smtpUsername")
         )
     }
     return status_from_checks("email", checks, missing, identity=identity)
