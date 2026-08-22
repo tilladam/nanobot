@@ -14,7 +14,7 @@ from email import policy
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.parser import BytesParser
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -70,6 +70,11 @@ class EmailConfig(Base):
     max_body_chars: int = 12000
     subject_prefix: str = "Re: "
     allow_from: list[str] = Field(default_factory=list)
+
+    # When set, only process messages actually addressed (To/Cc/Delivered-To/
+    # X-Original-To) to this alias — lets the bot share a mailbox that also
+    # receives mail for other aliases without acting on it.
+    alias_address: str = ""
 
     # Email authentication verification (anti-spoofing)
     verify_dkim: bool = True  # Require Authentication-Results with dkim=pass
@@ -174,6 +179,7 @@ class EmailChannel(BaseChannel):
                 inbound_items, skipped_uids = await asyncio.to_thread(self._fetch_new_messages)
                 should_apply_post_action = self._should_apply_post_action()
                 post_actions_uids: set[str] = set()
+                mark_seen_uids: set[str] = set()
                 for item in inbound_items:
                     sender = item["sender"]
                     subject = item.get("subject", "")
@@ -196,16 +202,23 @@ class EmailChannel(BaseChannel):
                         self.logger.exception("Error delivering email from {}", sender)
                         continue
 
+                    # Only a message that was genuinely accepted (passed all filters)
+                    # AND handed off successfully above is marked \Seen.
                     metadata = item.get("metadata")
                     metadata_data = (
                         cast(dict[str, Any], metadata) if isinstance(metadata, dict) else {}
                     )
                     uid = str(metadata_data.get("uid") or "")
+                    if uid and self.config.mark_seen:
+                        mark_seen_uids.add(uid)
                     if uid and should_apply_post_action:
                         post_actions_uids.add(uid)
 
                 if should_apply_post_action and not self.config.post_action_ignore_skipped:
                     post_actions_uids.update(skipped_uids)
+
+                if mark_seen_uids:
+                    await asyncio.to_thread(self._mark_seen_batch, sorted(mark_seen_uids))
 
                 if post_actions_uids:
                     await asyncio.to_thread(
@@ -458,10 +471,13 @@ class EmailChannel(BaseChannel):
         smtp.auth("XOAUTH2", _authobject, initial_response_ok=True)
 
     def _fetch_new_messages(self) -> tuple[list[dict[str, Any]], set[str]]:
-        """Poll IMAP and return parsed unread messages plus skipped message UIDs."""
+        """Poll IMAP and return parsed unread messages plus skipped message UIDs.
+
+        Nothing is marked \\Seen here — the caller marks a message \\Seen only
+        after it has actually been delivered to the agent (see start()).
+        """
         return self._fetch_messages(
             search_criteria=("UNSEEN",),
-            mark_seen=self.config.mark_seen,
             dedupe=True,
             limit=0,
         )
@@ -487,7 +503,6 @@ class EmailChannel(BaseChannel):
                 "BEFORE",
                 self._format_imap_date(end_date),
             ),
-            mark_seen=False,
             dedupe=False,
             limit=max(1, int(limit)),
         )
@@ -496,7 +511,6 @@ class EmailChannel(BaseChannel):
     def _fetch_messages(
         self,
         search_criteria: tuple[str, ...],
-        mark_seen: bool,
         dedupe: bool,
         limit: int,
     ) -> tuple[list[dict[str, Any]], set[str]]:
@@ -508,7 +522,6 @@ class EmailChannel(BaseChannel):
             try:
                 self._fetch_messages_once(
                     search_criteria,
-                    mark_seen,
                     dedupe,
                     limit,
                     messages,
@@ -526,7 +539,6 @@ class EmailChannel(BaseChannel):
     def _fetch_messages_once(
         self,
         search_criteria: tuple[str, ...],
-        mark_seen: bool,
         dedupe: bool,
         limit: int,
         messages: list[dict[str, Any]],
@@ -555,8 +567,6 @@ class EmailChannel(BaseChannel):
             if limit > 0 and len(uids) > limit:
                 uids = uids[-limit:]
 
-            features: _ServerFeatures | None = None
-
             for uid in uids:
                 if not uid or uid in cycle_uids:
                     continue
@@ -577,8 +587,16 @@ class EmailChannel(BaseChannel):
                 if self._is_self_address(sender):
                     self.logger.info("From {} ignored: matches bot-owned address", sender)
                     self._remember_processed_uid(uid, dedupe, cycle_uids)
-                    if mark_seen:
-                        features = self._mark_seen_uid(client, uid, features)
+                    skipped_uids.add(uid)
+                    continue
+
+                if self.config.alias_address and not self._addressed_to_alias(parsed):
+                    self.logger.info(
+                        "From {} ignored: not addressed to configured alias {}",
+                        sender,
+                        self.config.alias_address,
+                    )
+                    self._remember_processed_uid(uid, dedupe, cycle_uids)
                     skipped_uids.add(uid)
                     continue
 
@@ -605,8 +623,6 @@ class EmailChannel(BaseChannel):
 
                 if not self.is_allowed(sender):
                     self._remember_processed_uid(uid, dedupe, cycle_uids)
-                    if mark_seen:
-                        features = self._mark_seen_uid(client, uid, features)
                     skipped_uids.add(uid)
                     continue
 
@@ -670,20 +686,8 @@ class EmailChannel(BaseChannel):
                 )
 
                 self._remember_processed_uid(uid, dedupe, cycle_uids)
-
-                if mark_seen:
-                    features = self._mark_seen_uid(client, uid, features)
         finally:
             self._close_imap_client(client)
-
-    def _mark_seen_uid(
-        self, client: Any, uid: str, features: _ServerFeatures | None
-    ) -> _ServerFeatures:
-        """Mark a single UID \\Seen, reusing session-learned STORE support."""
-        if features is None:
-            features = self._server_features(client)
-        self._uid_store_flag(client, uid, "\\Seen", features)
-        return features
 
     def _open_imap_client(self, mailbox: str, *, missing_mailbox_ok: bool = False) -> Any | None:
         if self.config.imap_use_ssl:
@@ -759,6 +763,31 @@ class EmailChannel(BaseChannel):
         """Return True when an inbound sender belongs to the bot itself."""
         normalized_sender = self._normalize_address(sender)
         return bool(normalized_sender) and normalized_sender in self._self_addresses
+
+    def _addressed_to_alias(self, parsed_msg: Any) -> bool:
+        """Return True when the configured alias appears among the message's
+        actual recipients (To/Cc, plus Delivered-To/X-Original-To when present)."""
+        alias = self._normalize_address(self.config.alias_address)
+        if not alias:
+            return True
+        return alias in self._extract_recipient_addresses(parsed_msg)
+
+    @staticmethod
+    def _extract_recipient_addresses(parsed_msg: Any) -> set[str]:
+        """Collect every normalized recipient address a message was sent to."""
+        addresses: set[str] = set()
+        for header in ("To", "Cc"):
+            raw_values = cast(list[str], parsed_msg.get_all(header) or [])
+            for _name, addr in getaddresses(raw_values):
+                normalized = EmailChannel._normalize_address(addr)
+                if normalized:
+                    addresses.add(normalized)
+        for header in ("Delivered-To", "X-Original-To", "Envelope-To"):
+            for raw_value in cast(list[str], parsed_msg.get_all(header) or []):
+                normalized = EmailChannel._normalize_address(str(raw_value))
+                if normalized:
+                    addresses.add(normalized)
+        return addresses
 
     def _remember_processed_uid(self, uid: str, dedupe: bool, cycle_uids: set[str]) -> None:
         """Track a fetched UID so skipped messages are not reprocessed forever."""
@@ -883,6 +912,29 @@ class EmailChannel(BaseChannel):
             self.logger.warning("Failed to set flag {} on UID {}", flag, uid)
             return False
         return True
+
+    def _mark_seen_batch(self, uids: list[str]) -> None:
+        """Mark UIDs \\Seen in one IMAP session.
+
+        Called only for messages that were actually delivered to the agent —
+        see start(). Messages filtered out (self-sent, wrong alias, SPF/DKIM
+        failure, not allow-listed) are never marked \\Seen here.
+        """
+        if not uids:
+            return
+
+        mailbox = self.config.imap_mailbox or "INBOX"
+        client = self._open_imap_client(mailbox=mailbox)
+        if client is None:
+            return
+
+        try:
+            features = self._server_features(client)
+            for uid in uids:
+                if uid:
+                    self._uid_store_flag(client, uid, "\\Seen", features)
+        finally:
+            self._close_imap_client(client)
 
     def _uid_expunge_or_fallback(self, client: Any, uid: str, features: _ServerFeatures) -> None:
         # Prefer UID-scoped expunge when supported to avoid expunging unrelated

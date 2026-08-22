@@ -60,6 +60,7 @@ export default {
         { key: "channels.email.oauthClientId" },
         { key: "channels.email.oauthClientSecret" },
         { key: "channels.email.pollIntervalSeconds" },
+        { key: "channels.email.aliasAddress" },
         { key: "channels.email.allowFrom" },
         { key: "channels.email.verifyDkim" },
         { key: "channels.email.verifySpf" },
