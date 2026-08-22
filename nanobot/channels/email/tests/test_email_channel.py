@@ -481,6 +481,82 @@ async def test_start_skips_post_action_when_delivery_fails(monkeypatch) -> None:
     assert called["post_action"] is False
 
 
+async def test_start_evicts_uid_from_dedup_cache_when_delivery_fails(monkeypatch) -> None:
+    """A UID that fails delivery must be retried on a later poll, not silently
+    dropped forever — it was never marked \\Seen, so it must not be stuck as
+    'already processed' either."""
+    channel = EmailChannel(_make_config(), MessageBus())
+
+    fetched = (
+        [
+            {
+                "sender": "alice@example.com",
+                "subject": "Hi",
+                "message_id": "<m1@example.com>",
+                "content": "hello",
+                "metadata": {"uid": "123"},
+            }
+        ],
+        [],
+    )
+
+    def _fake_fetch():
+        channel._running = False
+        return fetched
+
+    async def _fake_handle_message(**_kwargs):
+        raise RuntimeError("delivery failed")
+
+    monkeypatch.setattr(channel, "_fetch_new_messages", _fake_fetch)
+    monkeypatch.setattr(channel, "_handle_message", _fake_handle_message)
+
+    channel._processed_uids.add("123")
+    await channel.start()
+
+    assert "123" not in channel._processed_uids
+
+
+async def test_start_mark_seen_failure_does_not_suppress_post_action(monkeypatch) -> None:
+    channel = EmailChannel(_make_config(post_action="delete"), MessageBus())
+
+    fetched = (
+        [
+            {
+                "sender": "alice@example.com",
+                "subject": "Hi",
+                "message_id": "<m1@example.com>",
+                "content": "hello",
+                "metadata": {"uid": "123"},
+            }
+        ],
+        [],
+    )
+
+    def _fake_fetch():
+        channel._running = False
+        return fetched
+
+    async def _fake_handle_message(**_kwargs):
+        return None
+
+    def _fake_mark_seen(_uids):
+        raise RuntimeError("IMAP connection dropped")
+
+    called_actions: list[str] = []
+
+    def _fake_batch(actions):
+        called_actions.extend(actions)
+
+    monkeypatch.setattr(channel, "_fetch_new_messages", _fake_fetch)
+    monkeypatch.setattr(channel, "_handle_message", _fake_handle_message)
+    monkeypatch.setattr(channel, "_mark_seen_batch", _fake_mark_seen)
+    monkeypatch.setattr(channel, "_apply_post_actions_batch", _fake_batch)
+
+    await channel.start()
+
+    assert called_actions == ["123"]
+
+
 @pytest.mark.asyncio
 async def test_start_keeps_post_actions_for_successful_emails_when_later_delivery_fails(
     monkeypatch,

@@ -342,7 +342,13 @@ def start_email_oauth_login(
     # The registered redirect URI uses "localhost", which some systems resolve to
     # ::1 before 127.0.0.1. Listen on both loopback families on the same port so
     # the browser reaches us regardless of which address it picks.
-    servers = _make_callback_servers(state, result_queue)
+    try:
+        servers = _make_callback_servers(state, result_queue)
+    except OSError as exc:
+        raise MicrosoftOAuthError(
+            f"Could not start the sign-in callback listener on port {MS_CALLBACK_PORT}: {exc}. "
+            "Free that port and try again."
+        ) from exc
     authorize_endpoint = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize"
     authorization_url = _build_authorize_url(
         authorize_endpoint,
@@ -530,8 +536,15 @@ def _exchange_callback(
         raise MicrosoftOAuthError(f"Microsoft sign-in was not completed: {callback.error}")
     if not callback.code:
         raise MicrosoftOAuthError("Microsoft sign-in returned no authorization code.")
-    if callback.state and not hmac.compare_digest(callback.state, expected_state):
-        raise MicrosoftOAuthError("Microsoft sign-in failed because the OAuth state did not match.")
+    # State must always be present and match — an authorization code with no
+    # verifiable state (e.g. pasted as a bare code, not a full callback URL)
+    # cannot be distinguished from a code belonging to an unrelated flow for
+    # the same client_id/redirect_uri.
+    if not callback.state or not hmac.compare_digest(callback.state, expected_state):
+        raise MicrosoftOAuthError(
+            "Microsoft sign-in could not be verified. Paste the full callback URL "
+            "(including the state parameter), not just the authorization code."
+        )
 
     token_endpoint = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
     payload = _exchange_code(

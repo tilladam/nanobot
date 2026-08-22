@@ -132,3 +132,47 @@ def test_logout_removes_token_file(monkeypatch, tmp_path) -> None:
     assert logout_email_oauth() is True
     assert get_email_oauth_login_status("tenant-1", "client-1", "bot@example.com") is None
     assert logout_email_oauth() is False
+
+
+def test_exchange_callback_rejects_response_with_no_state() -> None:
+    """A bare pasted authorization code carries no state and must be
+    rejected — without PKCE, state is the only defense against exchanging a
+    code that belongs to an unrelated authorization flow."""
+    callback = ms_oauth._CallbackResult(code="some-code", state=None)  # noqa: SLF001
+    with pytest.raises(MicrosoftOAuthError, match="could not be verified"):
+        ms_oauth._exchange_callback(  # noqa: SLF001
+            callback,
+            expected_state="expected-state",
+            tenant_id="tenant-1",
+            client_id="client-1",
+            client_secret="secret-1",
+            mailbox="bot@example.com",
+        )
+
+
+def test_exchange_callback_rejects_mismatched_state() -> None:
+    callback = ms_oauth._CallbackResult(code="some-code", state="wrong-state")  # noqa: SLF001
+    with pytest.raises(MicrosoftOAuthError, match="could not be verified"):
+        ms_oauth._exchange_callback(  # noqa: SLF001
+            callback,
+            expected_state="expected-state",
+            tenant_id="tenant-1",
+            client_id="client-1",
+            client_secret="secret-1",
+            mailbox="bot@example.com",
+        )
+
+
+def test_start_email_oauth_login_wraps_port_bind_failure(monkeypatch) -> None:
+    def _fail_bind(*_args, **_kwargs):
+        raise OSError("Address already in use")
+
+    monkeypatch.setattr(ms_oauth, "_make_callback_servers", _fail_bind)
+
+    with pytest.raises(MicrosoftOAuthError, match="callback listener"):
+        ms_oauth.start_email_oauth_login(
+            tenant_id="tenant-1",
+            client_id="client-1",
+            client_secret="secret-1",
+            mailbox="bot@example.com",
+        )

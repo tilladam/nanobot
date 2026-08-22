@@ -184,6 +184,11 @@ class EmailChannel(BaseChannel):
                     sender = item["sender"]
                     subject = item.get("subject", "")
                     message_id = item.get("message_id", "")
+                    metadata = item.get("metadata")
+                    metadata_data = (
+                        cast(dict[str, Any], metadata) if isinstance(metadata, dict) else {}
+                    )
+                    uid = str(metadata_data.get("uid") or "")
 
                     if subject:
                         self._last_subject_by_chat[sender] = subject
@@ -200,15 +205,15 @@ class EmailChannel(BaseChannel):
                         )
                     except Exception:
                         self.logger.exception("Error delivering email from {}", sender)
+                        # Delivery failed, so this UID was never marked \Seen — undo
+                        # the in-memory dedup mark too, or it would silently never be
+                        # retried even though it's still unread on the server.
+                        if uid:
+                            self._processed_uids.discard(uid)
                         continue
 
                     # Only a message that was genuinely accepted (passed all filters)
                     # AND handed off successfully above is marked \Seen.
-                    metadata = item.get("metadata")
-                    metadata_data = (
-                        cast(dict[str, Any], metadata) if isinstance(metadata, dict) else {}
-                    )
-                    uid = str(metadata_data.get("uid") or "")
                     if uid and self.config.mark_seen:
                         mark_seen_uids.add(uid)
                     if uid and should_apply_post_action:
@@ -218,7 +223,12 @@ class EmailChannel(BaseChannel):
                     post_actions_uids.update(skipped_uids)
 
                 if mark_seen_uids:
-                    await asyncio.to_thread(self._mark_seen_batch, sorted(mark_seen_uids))
+                    try:
+                        await asyncio.to_thread(self._mark_seen_batch, sorted(mark_seen_uids))
+                    except Exception:
+                        # Don't let a mark-\Seen failure (e.g. a dropped IMAP
+                        # connection) suppress the post_action batch below.
+                        self.logger.exception("Failed to mark messages \\Seen")
 
                 if post_actions_uids:
                     await asyncio.to_thread(
