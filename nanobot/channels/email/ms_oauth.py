@@ -159,7 +159,16 @@ class EmailOAuthLoginFlow:
 
         callback: _CallbackResult | None
         if authorization_code is not None:
-            callback = _CallbackResult(code=authorization_code.strip())
+            candidate = authorization_code.strip()
+            if candidate.startswith("http"):
+                parsed = urlsplit(candidate)
+                params = parse_qs(parsed.query)
+                code = _first(params, "code")
+                received_state = _first(params, "state")
+                error = _first(params, "error_description") or _first(params, "error")
+                callback = _CallbackResult(code=code, state=received_state, error=error)
+            else:
+                callback = _CallbackResult(code=candidate)
         else:
             try:
                 callback = self._result_queue.get_nowait()
