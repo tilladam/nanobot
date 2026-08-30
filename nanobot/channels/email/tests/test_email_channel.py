@@ -555,6 +555,40 @@ async def test_start_mark_seen_failure_does_not_suppress_post_action(monkeypatch
     await channel.start()
 
     assert called_actions == ["123"]
+    # The message was already delivered — it must not be re-delivered, but
+    # the failed \Seen STORE must be retried on a later poll.
+    assert channel._pending_mark_seen == {"123"}
+
+
+async def test_start_retries_pending_mark_seen_without_redelivering(monkeypatch) -> None:
+    """A UID whose \\Seen STORE failed last cycle must be retried on the next
+    poll, without the message going through delivery again."""
+    channel = EmailChannel(_make_config(), MessageBus())
+    channel._pending_mark_seen.add("123")
+
+    def _fake_fetch():
+        channel._running = False
+        return ([], set())
+
+    handled: list[str] = []
+
+    async def _fake_handle_message(**kwargs):
+        handled.append(kwargs["chat_id"])
+
+    marked: list[list[str]] = []
+
+    def _fake_mark_seen(uids):
+        marked.append(uids)
+
+    monkeypatch.setattr(channel, "_fetch_new_messages", _fake_fetch)
+    monkeypatch.setattr(channel, "_handle_message", _fake_handle_message)
+    monkeypatch.setattr(channel, "_mark_seen_batch", _fake_mark_seen)
+
+    await channel.start()
+
+    assert handled == []
+    assert marked == [["123"]]
+    assert channel._pending_mark_seen == set()
 
 
 @pytest.mark.asyncio

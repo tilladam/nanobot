@@ -151,6 +151,9 @@ class EmailChannel(BaseChannel):
         self._last_message_id_by_chat: dict[str, str] = {}
         self._processed_uids: set[str] = set()  # Capped to prevent unbounded growth
         self._MAX_PROCESSED_UIDS = 100000
+        # UIDs that were delivered but whose \Seen STORE failed (e.g. a dropped
+        # IMAP connection). Retried on the next poll — never re-delivered.
+        self._pending_mark_seen: set[str] = set()
 
     async def start(self) -> None:
         """Start polling IMAP for inbound emails."""
@@ -222,13 +225,19 @@ class EmailChannel(BaseChannel):
                 if should_apply_post_action and not self.config.post_action_ignore_skipped:
                     post_actions_uids.update(skipped_uids)
 
+                mark_seen_uids.update(self._pending_mark_seen)
                 if mark_seen_uids:
                     try:
                         await asyncio.to_thread(self._mark_seen_batch, sorted(mark_seen_uids))
                     except Exception:
                         # Don't let a mark-\Seen failure (e.g. a dropped IMAP
-                        # connection) suppress the post_action batch below.
-                        self.logger.exception("Failed to mark messages \\Seen")
+                        # connection) suppress the post_action batch below. The
+                        # message was already delivered and must not be
+                        # re-delivered, so retry only the \Seen STORE next poll.
+                        self.logger.exception("Failed to mark messages \\Seen; will retry next poll")
+                        self._pending_mark_seen.update(mark_seen_uids)
+                    else:
+                        self._pending_mark_seen.clear()
 
                 if post_actions_uids:
                     await asyncio.to_thread(
