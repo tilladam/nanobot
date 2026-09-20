@@ -62,7 +62,7 @@ class TTSTool(Tool):
             "required": ["text"],
         }
 
-    async def execute(
+    async def execute(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
         text: str,
         voice_id: str | None = None,
