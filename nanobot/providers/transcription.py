@@ -18,6 +18,7 @@ from typing import Any, cast
 
 import httpx
 import litellm
+from litellm.types.utils import ModelResponse  # pyright: ignore[reportMissingTypeStubs]
 from loguru import logger
 
 _CHAT_COMPLETIONS_PATH = "chat/completions"
@@ -807,7 +808,7 @@ class GeminiTranscriptionProvider:
         audio_b64 = base64.b64encode(path.read_bytes()).decode()
 
         try:
-            response = await litellm.acompletion(
+            response = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]
                 model=self.model,
                 messages=[
                     {
@@ -829,7 +830,8 @@ class GeminiTranscriptionProvider:
                 ],
                 api_key=self.api_key,
             )
-            return response.choices[0].message.content or ""
+            result = cast(ModelResponse, response)
+            return result.choices[0].message.content or ""
 
         except Exception as e:
             logger.error("Gemini transcription error: {}", e)
