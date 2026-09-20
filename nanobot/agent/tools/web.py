@@ -15,7 +15,7 @@ from typing import Any, cast
 from urllib.parse import parse_qsl, quote, urljoin, urlparse
 
 import httpx
-from ddgs import DDGS
+from ddgs import DDGS  # pyright: ignore[reportUnknownVariableType]
 from loguru import logger
 from pydantic import Field
 
@@ -85,26 +85,26 @@ class WebToolsConfig(Base):
     fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
 
 
-_DDGS_EXECUTOR: Any = None
+_ddgs_executor: Any = None
 
 
 def _get_ddgs_executor() -> Any:
     """Get or initialize the executor for DuckDuckGo searches."""
-    global _DDGS_EXECUTOR
-    if _DDGS_EXECUTOR is None:
-        _DDGS_EXECUTOR = ProcessPoolExecutor(max_workers=1)
-    return _DDGS_EXECUTOR
+    global _ddgs_executor
+    if _ddgs_executor is None:
+        _ddgs_executor = ProcessPoolExecutor(max_workers=1)
+    return _ddgs_executor
 
 
 def set_ddgs_executor(executor: Any) -> Any:
     """Override the executor used for DuckDuckGo searches (useful for testing)."""
-    global _DDGS_EXECUTOR
-    old = _DDGS_EXECUTOR
-    _DDGS_EXECUTOR = executor
+    global _ddgs_executor
+    old = _ddgs_executor
+    _ddgs_executor = executor
     return old
 
 
-_DDGS_CLASS = DDGS
+_DDGS_CLASS = DDGS  # pyright: ignore[reportUnknownVariableType]
 
 
 def _sync_ddgs_search(query: str, n: int, proxy: str | None = None) -> list[dict[str, str]]:
