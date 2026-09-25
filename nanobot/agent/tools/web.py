@@ -108,17 +108,17 @@ _DDGS_CLASS = DDGS  # pyright: ignore[reportUnknownVariableType]
 
 
 def _sync_ddgs_search(query: str, n: int, proxy: str | None = None) -> list[dict[str, str]]:
-    """Isolated worker for DuckDuckGo search to prevent library hangs."""
-    try:
-        ddgs = _DDGS_CLASS(timeout=10, proxy=proxy)
-        if hasattr(ddgs, "__enter__"):
-            with ddgs:
-                return list(ddgs.text(query, max_results=n))
-        else:
+    """Isolated worker for DuckDuckGo search to prevent library hangs.
+
+    Exceptions propagate to the caller (across the process boundary) rather
+    than being swallowed here, so _search_duckduckgo's own privacy-aware
+    error handling and logging still runs.
+    """
+    ddgs = _DDGS_CLASS(timeout=10, proxy=proxy)
+    if hasattr(ddgs, "__enter__"):
+        with ddgs:
             return list(ddgs.text(query, max_results=n))
-    except Exception as e:
-        logger.warning("DDG sync search worker failed: {}", e)
-        return []
+    return list(ddgs.text(query, max_results=n))
 
 
 def _strip_tags(text: str) -> str:
