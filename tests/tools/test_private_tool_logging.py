@@ -1,7 +1,7 @@
 """Synthetic privacy regressions for tool diagnostics, without external requests."""
 
 import asyncio
-import sys
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -27,7 +27,12 @@ from nanobot.agent.tools.mcp import (
     MCPToolWrapper,
 )
 from nanobot.agent.tools.registry import ToolRegistry
-from nanobot.agent.tools.web import WebFetchTool, WebSearchTool, _redact_url_for_log
+from nanobot.agent.tools.web import (
+    WebFetchTool,
+    WebSearchTool,
+    _redact_url_for_log,
+    set_ddgs_executor,
+)
 from nanobot.agent.turn_hooks import AgentTurnHookSpec, build_agent_turn_hook
 from nanobot.config.schema import MCPServerConfig, WebSearchConfig
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -177,8 +182,17 @@ async def test_web_private_diagnostics_keep_error_category_not_content(
             monkeypatch.setattr(tool, "_search_duckduckgo", AsyncMock(return_value="fallback"))
             assert await tool._search_jina(_SECRET, 1) == "fallback"
         elif kind == "duckduckgo":
-            monkeypatch.setitem(sys.modules, "ddgs", SimpleNamespace(DDGS=MagicMock(side_effect=error)))
-            result = await WebSearchTool()._search_duckduckgo(_SECRET, 1)
+            # DDGS search runs in a separate process (to survive library hangs),
+            # so the mock must go through _DDGS_CLASS and a same-process executor
+            # rather than patching the ddgs module, which the worker process
+            # never sees.
+            monkeypatch.setattr("nanobot.agent.tools.web._DDGS_CLASS", MagicMock(side_effect=error))
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                old_executor = set_ddgs_executor(executor)
+                try:
+                    result = await WebSearchTool()._search_duckduckgo(_SECRET, 1)
+                finally:
+                    set_ddgs_executor(old_executor)
             assert _SECRET in result
         else:
             raw = f"Error: private/internal address {url}"
