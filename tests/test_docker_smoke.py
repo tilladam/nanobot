@@ -17,7 +17,7 @@ pytestmark = pytest.mark.skipif(
 SCRIPT = Path(__file__).with_name("test_docker.sh")
 STATUS_OUTPUT = (
     "nanobot Status\nConfig: configured\nWorkspace: ready\nModel: test\n"
-    "OpenRouter API: unset\nAnthropic API: unset\nOpenAI API: unset"
+    "OpenRouter: unset\nAnthropic: unset\nOpenAI: unset"
 )
 
 
