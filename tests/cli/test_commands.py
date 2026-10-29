@@ -2203,8 +2203,12 @@ def test_heartbeat_empty_response_is_not_evaluated(
         def __init__(self, _workspace: Path) -> None:
             pass
 
-        def list_sessions(self) -> list[dict[str, str]]:
-            return [{"key": "telegram:u1"}]
+        @property
+        def state(self):
+            state = super().state
+            state.list_sessions.return_value = [{"key": "telegram:u1"}]
+            state.read = AsyncMock(return_value=SimpleNamespace(generation=0))
+            return state
 
     class _FakeCron:
         def __init__(self, _store_path: Path, *, admission=None) -> None:
@@ -2229,6 +2233,7 @@ def test_heartbeat_empty_response_is_not_evaluated(
             self.tools = {}
 
         async def process_direct(self, *_args, **_kwargs):
+            seen["process_direct_called"] = True
             return SimpleNamespace(content="")
 
         def heartbeat_runtime(self):
@@ -2269,6 +2274,7 @@ def test_heartbeat_empty_response_is_not_evaluated(
     cron = seen["cron"]
     response = asyncio.run(cron.on_job(CronJob(id="heartbeat", name="heartbeat")))
 
+    assert seen["process_direct_called"] is True
     assert response is None
 
 
@@ -2290,25 +2296,19 @@ def test_heartbeat_model_override_reaches_process_direct_and_evaluator(
     bus.publish_outbound = AsyncMock()
     seen: dict[str, object] = {}
 
-    class _FakeSession:
-        def retain_recent_legal_suffix(self, _limit: int) -> None:
-            return None
-
-    class _FakeSessionManager:
+    class _FakeSessionManager(_EmptyGatewaySessionManager):
         def __init__(self, _workspace: Path) -> None:
-            self.session = _FakeSession()
+            pass
 
-        def get_or_create(self, _key: str) -> _FakeSession:
-            return self.session
-
-        def save(self, _session: _FakeSession) -> None:
-            return None
-
-        def list_sessions(self) -> list[dict[str, str]]:
-            return [{"key": "telegram:u1"}]
+        @property
+        def state(self):
+            state = super().state
+            state.list_sessions.return_value = [{"key": "telegram:u1"}]
+            state.read = AsyncMock(return_value=SimpleNamespace(generation=0))
+            return state
 
     class _FakeCron:
-        def __init__(self, _store_path: Path) -> None:
+        def __init__(self, _store_path: Path, *, admission=None) -> None:
             self.on_job = None
             seen["cron"] = self
 

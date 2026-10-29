@@ -33,7 +33,7 @@ def docker_boundary(tmp_path):
         "if stage == 'run': stage = args[-1]\n"
         "if stage == 'status':\n"
         "    print('nanobot Status\\nConfig: configured\\nWorkspace: ready\\nModel: test\\n'\n"
-        "          'OpenRouter API: unset\\nAnthropic API: unset\\nOpenAI API: unset')\n"
+        "          'OpenRouter: unset\\nAnthropic: unset\\nOpenAI: unset')\n"
         "if stage == os.environ.get('DOCKER_FAIL_STAGE'): sys.exit(23)\n",
         encoding="utf-8",
     )
