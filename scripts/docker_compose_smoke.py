@@ -33,6 +33,15 @@ def main() -> None:
          "--profile", "cli", "config", "--format", "json"],
         text=True,
     ))
+    # Exercise both entrypoints in this temporary fixture while the deployment
+    # keeps its two gateways and leaves the standalone API disabled.
+    config["services"]["nanobot-gateway"] = config["services"].pop("nanobot")
+    api_service = config["services"].pop("briefings")
+    api_service["command"] = [
+        "serve", "--host", "0.0.0.0", "-w", "/home/nanobot/.nanobot/api-workspace",
+    ]
+    api_service["ports"] = [{"target": 8900, "published": "0", "protocol": "tcp"}]
+    config["services"]["nanobot-api"] = api_service
     with tempfile.TemporaryDirectory(prefix="nanobot-compose-smoke-") as temporary:
         root = Path(temporary)
         config.pop("name", None)
@@ -113,7 +122,7 @@ def main() -> None:
                     })
                     assert status == 503 and json.loads(body)["error"]["type"] == "configuration_error"
                 assert request(api + "/v1/models")[0] == 401
-                print(f"PASS {label}: both default services, authenticated WebUI, API model-setup errors")
+                print(f"PASS {label}: gateway/API services, authenticated WebUI, API model-setup errors")
 
                 # Configure a provider without making external model requests.
                 saved["providers"]["custom"] = {

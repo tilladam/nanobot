@@ -12,8 +12,5 @@ services:
   briefings:
     <<: *bwrap-security
 
-  nanobot-api:
-    <<: *bwrap-security
-
   nanobot-cli:
     <<: *bwrap-security
