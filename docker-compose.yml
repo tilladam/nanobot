@@ -3,7 +3,7 @@ x-common-config: &common-config
     context: .
     dockerfile: Dockerfile
     args:
-      NANOBOT_CHANNELS: ${NANOBOT_CHANNELS:-whatsapp}
+      NANOBOT_CHANNELS: ${NANOBOT_CHANNELS:-whatsapp,telegram}
   environment:
     NANOBOT_DOCKER_BOOTSTRAP: "1"
     NANOBOT_WEB_TOKEN: ${NANOBOT_WEB_TOKEN:-}
