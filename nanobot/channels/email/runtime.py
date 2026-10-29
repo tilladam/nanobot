@@ -1,3 +1,5 @@
+"""Email channel implementation using IMAP polling + SMTP replies."""
+
 import asyncio
 import html
 import imaplib
@@ -26,6 +28,7 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.bus.outbound_events import ProgressEvent
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
+from nanobot.channels.email import ms_oauth as email_oauth
 from nanobot.config.paths import get_media_dir
 from nanobot.config_base import Base
 from nanobot.events import ContextCompactionEvent
@@ -52,6 +55,13 @@ class EmailConfig(Base):
     smtp_use_tls: bool = True
     smtp_use_ssl: bool = False
     from_address: str = ""
+
+    # Microsoft OAuth (delegated user auth) for Office365/Outlook mailboxes.
+    # When set, IMAP/SMTP authenticate via XOAUTH2 instead of imap_password/smtp_password.
+    # Run `nanobot channels login email` to obtain the initial token.
+    oauth_tenant_id: str = ""
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
 
     auto_reply_enabled: bool = True
     poll_interval_seconds: int = 30
@@ -86,7 +96,7 @@ class EmailConfig(Base):
 
     # Attachment handling — set allowed types to enable (e.g. ["application/pdf", "image/*"], or ["*"] for all)
     allowed_attachment_types: list[str] = Field(default_factory=list)
-    max_attachment_size: int = 2_000_000
+    max_attachment_size: int = 2_000_000  # 2MB per attachment
     max_attachments_per_email: int = 5
 
 
@@ -166,7 +176,7 @@ class EmailChannel(BaseChannel):
         self._self_addresses = self._collect_self_addresses()
         self._last_subject_by_chat: dict[str, str] = {}
         self._last_message_id_by_chat: dict[str, str] = {}
-        self._processed_uids: set[str] = set()
+        self._processed_uids: set[str] = set()  # Capped to prevent unbounded growth
         self._MAX_PROCESSED_UIDS = 100000
         # UIDs that were delivered but whose \Seen STORE failed (e.g. a dropped
         # IMAP connection). Retried on the next poll — never re-delivered.
@@ -255,7 +265,9 @@ class EmailChannel(BaseChannel):
                         self._pending_mark_seen.clear()
 
                 if post_actions_uids:
-                    await asyncio.to_thread(self._apply_post_actions_batch, sorted(post_actions_uids))
+                    await asyncio.to_thread(
+                        self._apply_post_actions_batch, sorted(post_actions_uids)
+                    )
             except Exception:
                 self.logger.exception("Polling error")
 
@@ -288,6 +300,7 @@ class EmailChannel(BaseChannel):
         if not to_addr:
             raise DeliveryRejectedError("Missing email recipient address")
 
+        # Determine if this is a reply (recipient has sent us an email before)
         is_reply = to_addr in self._last_subject_by_chat
         force_send = bool((msg.metadata or {}).get("force_send"))
 
@@ -345,7 +358,9 @@ class EmailChannel(BaseChannel):
             content = f"{content.rstrip()}\n\n{fallback}" if content.strip() else fallback
 
         email_msg = EmailMessage()
-        email_msg["From"] = self.config.from_address or self.config.smtp_username or self.config.imap_username
+        email_msg["From"] = (
+            self.config.from_address or self.config.smtp_username or self.config.imap_username
+        )
         email_msg["To"] = to_addr
         email_msg["Subject"] = subject
         email_msg.set_content(content)
@@ -369,49 +384,140 @@ class EmailChannel(BaseChannel):
             self.logger.exception("Error sending to {}", to_addr)
             raise
 
+    def _oauth_configured(self) -> bool:
+        return bool(
+            self.config.oauth_tenant_id
+            and self.config.oauth_client_id
+            and self.config.oauth_client_secret
+        )
+
+    def _oauth_mailbox(self) -> str:
+        return self.config.from_address or self.config.imap_username or self.config.smtp_username
+
+    def _get_oauth_access_token(self) -> str:
+        token = email_oauth.get_email_oauth_token(
+            tenant_id=self.config.oauth_tenant_id,
+            client_id=self.config.oauth_client_id,
+            client_secret=self.config.oauth_client_secret,
+            mailbox=self._oauth_mailbox(),
+        )
+        return token.access
+
+    @staticmethod
+    def _xoauth2_string(user: str, access_token: str) -> str:
+        return f"user={user}\x01auth=Bearer {access_token}\x01\x01"
+
     def _validate_config(self) -> bool:
         missing: list[str] = []
         if not self.config.imap_host:
             missing.append("imap_host")
         if not self.config.imap_username:
             missing.append("imap_username")
-        if not self.config.imap_password:
-            missing.append("imap_password")
         if not self.config.smtp_host:
             missing.append("smtp_host")
         if not self.config.smtp_username:
             missing.append("smtp_username")
-        if not self.config.smtp_password:
-            missing.append("smtp_password")
 
-        if (self.config.verify_spf or self.config.verify_dkim) and not self.config.trusted_authserv_ids:
+        if (
+            self.config.verify_spf or self.config.verify_dkim
+        ) and not self.config.trusted_authserv_ids:
             missing.append("trusted_authserv_ids")
 
-        if self.config.post_action == "move" and not (self.config.post_action_move_mailbox or "").strip():
+        if self._oauth_configured():
+            if not email_oauth.get_email_oauth_login_status(
+                self.config.oauth_tenant_id, self.config.oauth_client_id, self._oauth_mailbox()
+            ):
+                self.logger.error(
+                    "Email OAuth is configured but not signed in. Run `nanobot channels login email`."
+                )
+                return False
+        else:
+            if not self.config.imap_password:
+                missing.append("imap_password")
+            if not self.config.smtp_password:
+                missing.append("smtp_password")
+
+        if (
+            self.config.post_action == "move"
+            and not (self.config.post_action_move_mailbox or "").strip()
+        ):
             missing.append("post_action_move_mailbox")
 
         if missing:
-            self.logger.error("Channel not configured, missing: {}", ', '.join(missing))
+            self.logger.error("Channel not configured, missing: {}", ", ".join(missing))
             return False
+        return True
+
+    async def login(self, force: bool = False) -> bool:
+        """Run the Microsoft OAuth sign-in flow for this mailbox.
+
+        Returns True if already signed in or sign-in succeeds; False on failure.
+        No-op (returns True) when OAuth isn't configured for this channel.
+        """
+        if not self._oauth_configured():
+            self.logger.info(
+                "Email OAuth is not configured (set oauth_tenant_id/oauth_client_id/"
+                "oauth_client_secret); nothing to sign in to."
+            )
+            return True
+
+        mailbox = self._oauth_mailbox()
+        if not force and email_oauth.get_email_oauth_login_status(
+            self.config.oauth_tenant_id, self.config.oauth_client_id, mailbox
+        ):
+            self.logger.info(
+                "Email is already signed in for {}. Use --force to sign in again.", mailbox
+            )
+            return True
+
+        try:
+            await asyncio.to_thread(
+                email_oauth.login_email_oauth,
+                tenant_id=self.config.oauth_tenant_id,
+                client_id=self.config.oauth_client_id,
+                client_secret=self.config.oauth_client_secret,
+                mailbox=mailbox,
+                print_fn=self.logger.info,
+                prompt_fn=input,
+            )
+        except email_oauth.MicrosoftOAuthError as exc:
+            self.logger.error("Microsoft sign-in failed: {}", exc)
+            return False
+        self.logger.info("Signed in to Microsoft for {}.", mailbox)
         return True
 
     def _smtp_send(self, msg: EmailMessage) -> None:
         timeout = 30
+        use_oauth = self._oauth_configured()
         if self.config.smtp_use_ssl:
             with smtplib.SMTP_SSL(
                 self.config.smtp_host,
                 self.config.smtp_port,
                 timeout=timeout,
             ) as smtp:
-                smtp.login(self.config.smtp_username, self.config.smtp_password)
+                self._smtp_authenticate(smtp, use_oauth)
                 smtp.send_message(msg)
             return
 
         with smtplib.SMTP(self.config.smtp_host, self.config.smtp_port, timeout=timeout) as smtp:
             if self.config.smtp_use_tls:
                 smtp.starttls(context=ssl.create_default_context())
-            smtp.login(self.config.smtp_username, self.config.smtp_password)
+            self._smtp_authenticate(smtp, use_oauth)
             smtp.send_message(msg)
+
+    def _smtp_authenticate(self, smtp: smtplib.SMTP, use_oauth: bool) -> None:
+        if not use_oauth:
+            smtp.login(self.config.smtp_username, self.config.smtp_password)
+            return
+        # smtp.auth(), unlike smtp.login(), does not issue EHLO itself.
+        smtp.ehlo_or_helo_if_needed()
+        user = self._normalize_address(self.config.smtp_username) or self._oauth_mailbox()
+        auth_string = self._xoauth2_string(user, self._get_oauth_access_token())
+
+        def _authobject(challenge: bytes | None = None) -> str:
+            return auth_string
+
+        smtp.auth("XOAUTH2", _authobject, initial_response_ok=True)
 
     def _fetch_new_messages(self) -> tuple[list[dict[str, Any]], set[str]]:
         """Poll IMAP and return parsed unread messages plus skipped message UIDs.
@@ -488,6 +594,13 @@ class EmailChannel(BaseChannel):
         skipped_uids: set[str],
         cycle_uids: set[str],
     ) -> list[dict[str, Any]] | None:
+        """Fetch messages by arbitrary IMAP search criteria.
+
+        Uses UID SEARCH so already-processed UIDs are recognized before any
+        FETCH at all, then fetches headers only to evaluate every filter — the
+        full body (and any attachments) is downloaded only for messages that
+        pass every check and are actually going to be delivered.
+        """
         mailbox = self.config.imap_mailbox or "INBOX"
 
         client = self._open_imap_client(mailbox=mailbox, missing_mailbox_ok=True)
@@ -587,6 +700,7 @@ class EmailChannel(BaseChannel):
                     f"{body}"
                 )
 
+                # --- Attachment extraction ---
                 attachment_paths: list[str] = []
                 if self.config.allowed_attachment_types:
                     saved = self._extract_attachments(
@@ -652,18 +766,31 @@ class EmailChannel(BaseChannel):
             client = imaplib.IMAP4(self.config.imap_host, self.config.imap_port)
 
         try:
-            client.login(self.config.imap_username, self.config.imap_password)
+            if self._oauth_configured():
+                user = self._normalize_address(self.config.imap_username) or self._oauth_mailbox()
+                auth_string = self._xoauth2_string(user, self._get_oauth_access_token())
+
+                def _authobject(_challenge: bytes) -> bytes:
+                    return auth_string.encode()
+
+                client.authenticate("XOAUTH2", _authobject)
+            else:
+                client.login(self.config.imap_username, self.config.imap_password)
             try:
                 status, _ = client.select(mailbox)
             except Exception as exc:
                 if missing_mailbox_ok and self._is_missing_mailbox_error(exc):
-                    self.logger.warning("Mailbox unavailable, skipping poll for {}: {}", mailbox, exc)
+                    self.logger.warning(
+                        "Mailbox unavailable, skipping poll for {}: {}", mailbox, exc
+                    )
                     self._close_imap_client(client)
                     return None
                 raise
 
             if status != "OK":
-                self.logger.warning("Mailbox select returned {}, skipping poll for {}", status, mailbox)
+                self.logger.warning(
+                    "Mailbox select returned {}, skipping poll for {}", status, mailbox
+                )
                 self._close_imap_client(client)
                 return None
         except Exception:
@@ -678,15 +805,14 @@ class EmailChannel(BaseChannel):
             client.logout()
 
     def _collect_self_addresses(self) -> set[str]:
+        """Return normalized email addresses owned by this channel instance."""
         candidates = (
             self.config.from_address,
             self.config.smtp_username,
             self.config.imap_username,
         )
         normalized = {
-            addr
-            for candidate in candidates
-            if (addr := self._normalize_address(candidate))
+            addr for candidate in candidates if (addr := self._normalize_address(candidate))
         }
         return normalized
 
@@ -704,6 +830,7 @@ class EmailChannel(BaseChannel):
         return ""
 
     def _is_self_address(self, sender: str) -> bool:
+        """Return True when an inbound sender belongs to the bot itself."""
         normalized_sender = self._normalize_address(sender)
         return bool(normalized_sender) and normalized_sender in self._self_addresses
 
@@ -733,6 +860,7 @@ class EmailChannel(BaseChannel):
         return addresses
 
     def _remember_processed_uid(self, uid: str, dedupe: bool, cycle_uids: set[str]) -> None:
+        """Track a fetched UID so skipped messages are not reprocessed forever."""
         if not uid:
             return
         cycle_uids.add(uid)
@@ -740,7 +868,10 @@ class EmailChannel(BaseChannel):
             self._processed_uids.add(uid)
             # mark_seen is the primary dedup; this set is a safety net
             if len(self._processed_uids) > self._MAX_PROCESSED_UIDS:
-                self._processed_uids = set(list(self._processed_uids)[len(self._processed_uids) // 2:])
+                # Evict a random half to cap memory; mark_seen is the primary dedup
+                self._processed_uids = set(
+                    list(self._processed_uids)[len(self._processed_uids) // 2 :]
+                )
 
     def _should_apply_post_action(self) -> bool:
         return self.config.post_action in {"delete", "move"}
@@ -784,12 +915,16 @@ class EmailChannel(BaseChannel):
             if features.move:
                 status, _ = client.uid("MOVE", uid, target)
                 if status != "OK":
-                    self.logger.warning("Post-action move failed (UID MOVE) for UID {} to mailbox {}", uid, target)
+                    self.logger.warning(
+                        "Post-action move failed (UID MOVE) for UID {} to mailbox {}", uid, target
+                    )
                 return
 
             status, _ = client.uid("COPY", uid, target)
             if status != "OK":
-                self.logger.warning("Post-action move failed (UID COPY) for UID {} to mailbox {}", uid, target)
+                self.logger.warning(
+                    "Post-action move failed (UID COPY) for UID {} to mailbox {}", uid, target
+                )
                 return
             if not self._uid_store_deleted(client, uid, features):
                 return
@@ -803,7 +938,9 @@ class EmailChannel(BaseChannel):
             if status == "OK" and data:
                 for raw in data:
                     if isinstance(raw, (bytes, bytearray)):
-                        caps.update(token.upper() for token in raw.decode("utf-8", errors="ignore").split())
+                        caps.update(
+                            token.upper() for token in raw.decode("utf-8", errors="ignore").split()
+                        )
                     elif isinstance(raw, str):
                         caps.update(token.upper() for token in raw.split())
         return _ServerFeatures(move="MOVE" in caps, uidplus="UIDPLUS" in caps)
@@ -943,12 +1080,12 @@ class EmailChannel(BaseChannel):
         return payload.strip()
 
     def _check_authentication_results(self, parsed_msg: Any, sender: str) -> tuple[bool, bool]:
+        """Return aligned SPF/DKIM verdicts from one trusted producer header."""
         from_headers: list[Any] = parsed_msg.get_all("From") or []
         if (
             len(from_headers) != 1
             or any(
-                not isinstance(defect, UndecodableBytesDefect)
-                for defect in from_headers[0].defects
+                not isinstance(defect, UndecodableBytesDefect) for defect in from_headers[0].defects
             )
             or len(getaddresses([str(from_headers[0])])) != 1
         ):
@@ -1016,7 +1153,10 @@ class EmailChannel(BaseChannel):
         no_results: tuple[str, tuple[_AuthenticationResult, ...]] = (authserv_id, ())
         if (
             len(parts) < 2
-            or re.fullmatch(r'(?:"[a-zA-Z0-9][a-zA-Z0-9._:-]*"|[a-zA-Z0-9][a-zA-Z0-9._:-]*)(?:\s+1)?', parts[0]) is None
+            or re.fullmatch(
+                r'(?:"[a-zA-Z0-9][a-zA-Z0-9._:-]*"|[a-zA-Z0-9][a-zA-Z0-9._:-]*)(?:\s+1)?', parts[0]
+            )
+            is None
         ):
             return no_results
 
@@ -1144,7 +1284,11 @@ class EmailChannel(BaseChannel):
                 if escaped:
                     return None
                 item_value = "".join(parsed_value)
-                if index < length and value[index] == "@" and key.casefold() in {"smtp.mailfrom", "header.i"}:
+                if (
+                    index < length
+                    and value[index] == "@"
+                    and key.casefold() in {"smtp.mailfrom", "header.i"}
+                ):
                     # RFC 8601 pvalue permits a quoted mailbox local part
                     # followed by @domain, not just a standalone quoted string.
                     domain_start = index
